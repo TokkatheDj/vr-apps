@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VR Budget Room</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  #help {
+    position: fixed; top: 10px; left: 10px; z-index: 10; max-width: 330px;
+    background: rgba(10,14,30,.82); color: #e8ecff; padding: 12px 14px;
+    border-radius: 10px; font-size: 13px; line-height: 1.45;
+  }
+  #help b { color: #8fd3ff; }
+  #help button { margin-top: 8px; background: #2b3a67; color: #fff; border: 0; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="help">
+  <b>VR Budget Room</b><br>
+  Every box on the shelf is a monthly expense. Sort them into <b>Needs</b>, <b>Wants</b>, and <b>Savings</b>
+  without going over your take-home pay. Target: <b>50 / 30 / 20</b>.<br>
+  <b>Desktop:</b> drag to look, WASD to move, click a box to pick it up, click a bin to drop it. Click the shelf to put it back.<br>
+  <b>Quest:</b> tap "VR", point a controller and pull the trigger.
+  <br><button onclick="document.getElementById('help').style.display='none'">Hide</button>
+</div>
+
+<a-scene
+  background="color: #0d1224"
+  renderer="antialias: true; colorManagement: true"
+  cursor="rayOrigin: mouse; fuse: false"
+  raycaster="objects: .clickable">
+
+  <a-entity light="type: ambient; intensity: 0.95"></a-entity>
+  <a-entity light="type: point; intensity: 1.3; distance: 14" position="0 3.2 -1"></a-entity>
+
+  <!-- room -->
+  <a-plane rotation="-90 0 0" width="9" height="9" color="#2a2533"></a-plane>
+  <a-plane position="0 1.75 -4.5" width="9" height="3.5" color="#1b2140"></a-plane>
+  <a-plane position="-4.5 1.75 0" rotation="0 90 0" width="9" height="3.5" color="#182040"></a-plane>
+  <a-plane position="4.5 1.75 0" rotation="0 -90 0" width="9" height="3.5" color="#182040"></a-plane>
+  <a-plane position="0 3.5 0" rotation="90 0 0" width="9" height="9" color="#101530"></a-plane>
+
+  <!-- shelf wall (click it to put an item back) -->
+  <a-plane id="shelf" class="clickable" position="0 1.55 -3.3" width="5.4" height="2.1" color="#3a3350"></a-plane>
+  <a-entity position="0 2.75 -3.25" text="value: MONTHLY EXPENSES  (click a box, then a bin); align: center; width: 5; wrapCount: 60; color: #ffd166"></a-entity>
+  <a-entity id="items"></a-entity>
+
+  <!-- table + bins -->
+  <a-box position="0 0.5 -1.3" width="4.6" height="0.08" depth="1" color="#5a4634"></a-box>
+  <a-box position="-2.1 0.25 -1.3" width="0.08" height="0.5" depth="0.9" color="#4a3a2c"></a-box>
+  <a-box position="2.1 0.25 -1.3" width="0.08" height="0.5" depth="0.9" color="#4a3a2c"></a-box>
+  <a-entity id="bins"></a-entity>
+
+  <!-- totals panel (left) -->
+  <a-plane position="-3.1 1.8 -1.6" rotation="0 40 0" width="1.7" height="1.7" color="#151d3d" material="shader: flat"></a-plane>
+  <a-entity id="totals" position="-3.1 1.8 -1.59" rotation="0 40 0"
+            text="value: ; align: left; width: 1.55; wrapCount: 30; color: #e8ecff; baseline: center"></a-entity>
+
+  <!-- feedback + buttons panel (right) -->
+  <a-entity id="panel" position="3.1 1.8 -1.6" rotation="0 -40 0">
+    <a-plane width="1.7" height="1.7" color="#151d3d" material="shader: flat"></a-plane>
+    <a-entity id="feedback" position="0 0.28 0.01"
+              text="value: Sort every box, then hit Check Budget.; align: center; width: 1.55; wrapCount: 30; color: #e8ecff; baseline: center"></a-entity>
+  </a-entity>
+
+  <!-- player -->
+  <a-entity id="rig" position="0 0 1.3">
+    <a-entity id="cam" camera look-controls wasd-controls="acceleration: 30" position="0 1.6 0"></a-entity>
+    <a-entity laser-controls="hand: left" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
+    <a-entity laser-controls="hand: right" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+(function () {
+  // ---------- data ----------
+  const ITEMS = [
+    { name: 'Rent', cost: 1100, cat: 'needs' },
+    { name: 'Groceries', cost: 350, cat: 'needs' },
+    { name: 'Car payment', cost: 300, cat: 'needs' },
+    { name: 'Car insurance', cost: 120, cat: 'needs' },
+    { name: 'Gas', cost: 140, cat: 'needs' },
+    { name: 'Utilities', cost: 110, cat: 'needs' },
+    { name: 'Phone plan', cost: 60, cat: 'needs' },
+    { name: 'Eating out', cost: 220, cat: 'wants' },
+    { name: 'New sneakers', cost: 90, cat: 'wants' },
+    { name: 'Streaming', cost: 35, cat: 'wants' },
+    { name: 'Video games', cost: 60, cat: 'wants' },
+    { name: 'Concert tix', cost: 80, cat: 'wants' },
+    { name: 'Gym', cost: 30, cat: 'wants' },
+    { name: 'Emergency fund', cost: 200, cat: 'savings' },
+    { name: 'Roth IRA', cost: 150, cat: 'savings' },
+    { name: 'Extra savings', cost: 100, cat: 'savings' },
+    { name: 'Extra savings', cost: 100, cat: 'savings' },
+    { name: 'Extra savings', cost: 100, cat: 'savings' }
+  ];
+  const INCOMES = [2400, 3200, 4500];
+  let incomeIdx = 1;
+  const PALETTE = ['#4361ee', '#7209b7', '#f72585', '#4cc9f0', '#f77f00', '#2a9d8f', '#e76f51', '#8338ec', '#3a86ff', '#ff006e', '#fb5607', '#06d6a0'];
+  const BINS = [
+    { key: 'needs', label: 'NEEDS', x: -1.45, color: '#3a86ff', rule: 'target 50% or less' },
+    { key: 'wants', label: 'WANTS', x: 0, color: '#fb8500', rule: 'target 30% or less' },
+    { key: 'savings', label: 'SAVINGS', x: 1.45, color: '#06d6a0', rule: 'target 20% or more' }
+  ];
+
+  const itemsRoot = document.getElementById('items');
+  const binsRoot = document.getElementById('bins');
+  const shelf = document.getElementById('shelf');
+  const totals = document.getElementById('totals');
+  const feedback = document.getElementById('feedback');
+  const panel = document.getElementById('panel');
+  let selected = null;
+
+  function el(tag, attrs, parent) {
+    const e = document.createElement(tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    parent.appendChild(e);
+    return e;
+  }
+  const money = n => '$' + n.toLocaleString();
+  const pct = (n, d) => Math.round(100 * n / d) + '%';
+
+  // ---------- shelf positions ----------
+  const COLS = 6;
+  function shelfPos(i) {
+    const col = i % COLS, row = Math.floor(i / COLS);
+    return { x: -2.1 + col * 0.84, y: 2.25 - row * 0.62, z: -3.05 };
+  }
+
+  // ---------- build items ----------
+  ITEMS.forEach((it, i) => {
+    const p = shelfPos(i);
+    it.color = PALETTE[i % PALETTE.length];
+    it.bin = null;
+    const box = el('a-box', {
+      class: 'clickable', width: 0.44, height: 0.44, depth: 0.36,
+      color: it.color, position: `${p.x} ${p.y} ${p.z}`
+    }, itemsRoot);
+    el('a-entity', {
+      position: '0 0 0.19',
+      text: `value: ${it.name}\n${money(it.cost)}; align: center; width: 0.42; wrapCount: 11; color: #fff`
+    }, box);
+    it.el = box;
+    box.addEventListener('mouseenter', () => { if (selected !== it) box.setAttribute('scale', '1.08 1.08 1.08'); });
+    box.addEventListener('mouseleave', () => { if (selected !== it) box.setAttribute('scale', '1 1 1'); });
+    box.addEventListener('click', evt => { evt.stopPropagation(); toggleSelect(it); });
+  });
+
+  function toggleSelect(it) {
+    if (selected === it) { deselect(); return; }
+    deselect();
+    selected = it;
+    it.el.setAttribute('color', '#ffd166');
+    it.el.setAttribute('scale', '1.18 1.18 1.18');
+    it.el.setAttribute('animation__bob', 'property: rotation; to: 0 360 0; dur: 2200; loop: true; easing: linear');
+    feedback.setAttribute('text', 'value', `Holding: ${it.name} (${money(it.cost)})\n\nClick a bin to drop it,\nor the shelf to put it back.`);
+  }
+  function deselect() {
+    if (!selected) return;
+    selected.el.setAttribute('color', selected.color);
+    selected.el.setAttribute('scale', '1 1 1');
+    selected.el.removeAttribute('animation__bob');
+    selected.el.setAttribute('rotation', '0 0 0');
+    selected = null;
+  }
+
+  function moveTo(it, pos) {
+    it.el.removeAttribute('animation__move');
+    it.el.setAttribute('animation__move', `property: position; to: ${pos.x} ${pos.y} ${pos.z}; dur: 450; easing: easeOutCubic`);
+  }
+
+  // ---------- bins ----------
+  BINS.forEach(bin => {
+    const g = el('a-entity', { position: `${bin.x} 0.54 -1.3` }, binsRoot);
+    // base + translucent walls
+    el('a-box', { position: '0 0.02 0', width: 1.1, height: 0.04, depth: 0.7, color: bin.color }, g);
+    const body = el('a-box', {
+      class: 'clickable', position: '0 0.25 0', width: 1.1, height: 0.5, depth: 0.7,
+      material: `color: ${bin.color}; opacity: 0.22; transparent: true`
+    }, g);
+    el('a-entity', { position: '0 0.66 0', text: `value: ${bin.label}; align: center; width: 1.6; wrapCount: 14; color: ${bin.color}` }, g);
+    bin.totalEl = el('a-entity', { position: '0 0.02 0.42', rotation: '-60 0 0', text: `value: $0; align: center; width: 1.2; wrapCount: 16; color: #fff` }, g);
+    bin.items = [];
+    body.addEventListener('mouseenter', () => body.setAttribute('material', 'opacity', 0.45));
+    body.addEventListener('mouseleave', () => body.setAttribute('material', 'opacity', 0.22));
+    body.addEventListener('click', evt => {
+      evt.stopPropagation();
+      if (!selected) { feedback.setAttribute('text', 'value', `${bin.label}: ${bin.rule}.\n\nPick up a box first.`); return; }
+      placeInBin(selected, bin);
+    });
+  });
+
+  function slotPos(bin, idx) {
+    const col = idx % 4, row = Math.floor(idx / 4);
+    return { x: bin.x - 0.39 + col * 0.26, y: 0.54 + 0.16 + row * 0.27, z: -1.3 + (row % 2 ? 0.12 : -0.12) };
+  }
+  function layoutBin(bin) {
+    bin.items.forEach((it, idx) => moveTo(it, slotPos(bin, idx)));
+    const sum = bin.items.reduce((s, it) => s + it.cost, 0);
+    bin.totalEl.setAttribute('text', 'value', money(sum));
+  }
+  function removeFromBin(it) {
+    if (!it.bin) return;
+    const bin = BINS.find(b => b.key === it.bin);
+    bin.items = bin.items.filter(x => x !== it);
+    it.bin = null;
+    layoutBin(bin);
+  }
+  function placeInBin(it, bin) {
+    removeFromBin(it);
+    it.bin = bin.key;
+    bin.items.push(it);
+    deselect();
+    it.el.setAttribute('scale', '0.55 0.55 0.55');
+    layoutBin(bin);
+    feedback.setAttribute('text', 'value', `${it.name} → ${bin.label}\n\n${bin.rule}.`);
+    updateTotals();
+  }
+  function returnToShelf(it) {
+    removeFromBin(it);
+    deselect();
+    it.el.setAttribute('scale', '1 1 1');
+    moveTo(it, shelfPos(ITEMS.indexOf(it)));
+    feedback.setAttribute('text', 'value', `${it.name} is back on the shelf.\n(Not spending it this month.)`);
+    updateTotals();
+  }
+  shelf.addEventListener('click', () => { if (selected) returnToShelf(selected); });
+
+  // ---------- totals + check ----------
+  function sums() {
+    const s = { needs: 0, wants: 0, savings: 0, unsorted: 0 };
+    ITEMS.forEach(it => { if (it.bin) s[it.bin] += it.cost; else s.unsorted++; });
+    s.spent = s.needs + s.wants + s.savings;
+    return s;
+  }
+  function updateTotals() {
+    const inc = INCOMES[incomeIdx], s = sums();
+    let t = `TAKE-HOME PAY: ${money(inc)}/mo\n\n`;
+    t += `Needs    ${money(s.needs).padEnd(7)} ${pct(s.needs, inc)}\n`;
+    t += `Wants    ${money(s.wants).padEnd(7)} ${pct(s.wants, inc)}\n`;
+    t += `Savings  ${money(s.savings).padEnd(7)} ${pct(s.savings, inc)}\n`;
+    t += `------------------------\n`;
+    t += `Assigned ${money(s.spent)}\n`;
+    const left = inc - s.spent;
+    t += left >= 0 ? `Left over ${money(left)}\n` : `OVER BY ${money(-left)} !\n`;
+    t += `\nStill on shelf: ${s.unsorted}\n\nTarget: 50 / 30 / 20`;
+    totals.setAttribute('text', 'value', t);
+  }
+
+  function checkBudget() {
+    const inc = INCOMES[incomeIdx], s = sums();
+    const lines = [];
+    const wrong = ITEMS.filter(it => it.bin && it.bin !== it.cat);
+    if (wrong.length) {
+      const w = wrong[0];
+      const label = { needs: 'a NEED', wants: 'a WANT', savings: 'SAVINGS' }[w.cat];
+      lines.push(`${w.name} usually counts as ${label}${wrong.length > 1 ? ` (+${wrong.length - 1} more to fix)` : ''}.`);
+    }
+    if (s.spent > inc) lines.push(`You're ${money(s.spent - inc)} over. Put a Want back on the shelf.`);
+    const n = s.needs / inc, w = s.wants / inc, sv = s.savings / inc;
+    lines.push(`Needs ${Math.round(n * 100)}% ${n <= 0.5 ? 'OK' : 'over 50%'}`);
+    lines.push(`Wants ${Math.round(w * 100)}% ${w <= 0.3 ? 'OK' : 'over 30%'}`);
+    lines.push(`Savings ${Math.round(sv * 100)}% ${sv >= 0.2 ? 'OK' : 'under 20%'}`);
+    const left = inc - s.spent;
+    if (left > 0 && sv < 0.2) lines.push(`${money(left)} is left over. Move it to savings!`);
+    const pass = !wrong.length && s.spent <= inc && n <= 0.5 && w <= 0.3 && sv >= 0.2;
+    if (pass) lines.unshift('BALANCED BUDGET! Nice work.');
+    else if (n > 0.5 && !wrong.length) lines.push('Needs over 50% is common. What could change: cheaper rent, roommate, more income?');
+    feedback.setAttribute('text', 'value', lines.join('\n\n'));
+  }
+
+  function resetAll() {
+    deselect();
+    BINS.forEach(b => { b.items = []; b.totalEl.setAttribute('text', 'value', '$0'); });
+    ITEMS.forEach((it, i) => { it.bin = null; it.el.setAttribute('scale', '1 1 1'); moveTo(it, shelfPos(i)); });
+    feedback.setAttribute('text', 'value', 'Shelf restocked.\n\nSort every box, then hit Check Budget.');
+    updateTotals();
+  }
+
+  // ---------- buttons ----------
+  function button(label, y, color, onClick) {
+    const b = el('a-entity', {
+      geometry: 'primitive: plane; width: 1.5; height: 0.22',
+      material: `color: ${color}; shader: flat`, position: `0 ${y} 0.01`, class: 'clickable'
+    }, panel);
+    el('a-entity', { position: '0 0 0.01', text: `value: ${label}; align: center; width: 1.4; wrapCount: 24; color: #fff` }, b);
+    b.addEventListener('mouseenter', () => b.setAttribute('material', 'color', '#6c7fd8'));
+    b.addEventListener('mouseleave', () => b.setAttribute('material', 'color', color));
+    b.addEventListener('click', evt => { evt.stopPropagation(); onClick(); });
+    return b;
+  }
+  button('Check Budget', -0.32, '#1f5a4a', checkBudget);
+  const incBtn = button(`Income: ${money(INCOMES[incomeIdx])}/mo`, -0.58, '#3d2b67', () => {
+    incomeIdx = (incomeIdx + 1) % INCOMES.length;
+    incBtn.querySelector('[text]').setAttribute('text', 'value', `Income: ${money(INCOMES[incomeIdx])}/mo`);
+    updateTotals();
+  });
+  button('Reset Shelf', -0.8, '#67352b', resetAll);
+
+  updateTotals();
+
+  // desktop nicety: refresh the mouse ray on mousedown so a click lands where the pointer is
+  const sceneEl = document.querySelector('a-scene');
+  function attachMouseShim() {
+    sceneEl.canvas.addEventListener('mousedown', evt => {
+      const c = sceneEl.components.cursor;
+      if (c && c.data.rayOrigin === 'mouse') { c.onMouseMove(evt); sceneEl.components.raycaster.checkIntersections(); }
+    }, true);
+  }
+  if (sceneEl.canvas) attachMouseShim(); else sceneEl.addEventListener('loaded', attachMouseShim);
+  sceneEl.addEventListener('enter-vr', () => { document.getElementById('help').style.display = 'none'; });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VR Slope Hill</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  #help {
+    position: fixed; top: 10px; left: 10px; z-index: 10; max-width: 330px;
+    background: rgba(10,14,30,.82); color: #e8ecff; padding: 12px 14px;
+    border-radius: 10px; font-size: 13px; line-height: 1.45;
+  }
+  #help b { color: #8fd3ff; }
+  #help button { margin-top: 8px; background: #2b3a67; color: #fff; border: 0; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="help">
+  <b>VR Slope Hill</b><br>
+  You are standing on the line <b>y = mx + b</b>. The ground tilts with the slope.
+  Look at the big graph wall to see where you are on the line.<br>
+  <b>Desktop:</b> drag to look, click the floating buttons.<br>
+  <b>Quest:</b> tap "VR", point a controller at the buttons and pull the trigger.<br>
+  Change <b>m</b> to feel the hill, <b>Walk</b> to move along it, or try <b>Guess</b> mode.
+  <br><button onclick="document.getElementById('help').style.display='none'">Hide</button>
+</div>
+
+<a-scene
+  background="color: #0a1226"
+  renderer="antialias: true; colorManagement: true"
+  cursor="rayOrigin: mouse; fuse: false"
+  raycaster="objects: .clickable">
+
+  <a-assets>
+    <canvas id="cell" width="128" height="128"></canvas>
+    <canvas id="cellDim" width="128" height="128"></canvas>
+    <canvas id="wallCanvas" width="1500" height="1000"></canvas>
+  </a-assets>
+
+  <a-entity light="type: ambient; intensity: 0.8"></a-entity>
+  <a-entity light="type: directional; intensity: 0.6" position="2 6 3"></a-entity>
+
+  <!-- flat ground = the x-axis level (y = 0) -->
+  <a-plane rotation="-90 0 0" width="80" height="80" material="src: #cellDim; repeat: 80 80; shader: flat"></a-plane>
+
+  <!-- the hill: a plane hinged at (0, b, 0), tilted by atan(m) -->
+  <a-entity id="rampTilt" position="0 0 0" rotation="0 0 0">
+    <a-plane rotation="-90 0 0" width="40" height="2.4" material="src: #cell; repeat: 40 3; shader: flat; side: double; opacity: 0.85; transparent: true"></a-plane>
+  </a-entity>
+
+  <!-- graph wall behind the hill -->
+  <a-plane id="wall" position="0 5 -7" width="30" height="20" material="src: #wallCanvas; shader: flat"></a-plane>
+  <a-entity id="wallMarks" position="0 0 -6.95"></a-entity>
+  <a-entity id="wallEq" position="0 13.5 -6.9"
+            text="value: y = x; align: center; width: 14; wrapCount: 26; color: #ffd166"></a-entity>
+
+  <!-- rise / run beams near the player -->
+  <a-entity id="beams"></a-entity>
+
+  <!-- player rig sits on the line -->
+  <a-entity id="rig" position="0 0 0">
+    <a-entity id="cam" camera look-controls position="0 1.6 0"></a-entity>
+    <a-entity laser-controls="hand: left" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
+    <a-entity laser-controls="hand: right" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
+
+    <!-- control panel travels with the player -->
+    <a-entity id="panel" position="-1 1.3 -2.6" rotation="-8 14 0" scale="1.35 1.35 1.35">
+      <a-plane width="2.1" height="1.45" color="#151d3d" material="shader: flat; opacity: 0.92"></a-plane>
+      <a-entity id="readout" position="0 0.52 0.01"
+                text="value: ; align: center; width: 2; wrapCount: 40; color: #e8ecff"></a-entity>
+    </a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+(function () {
+  // ---------- textures ----------
+  function drawCell(id, bg, line) {
+    const c = document.getElementById(id), g = c.getContext('2d');
+    g.fillStyle = bg; g.fillRect(0, 0, 128, 128);
+    g.strokeStyle = line; g.lineWidth = 4; g.strokeRect(2, 2, 124, 124);
+  }
+  drawCell('cell', '#243466', '#8fd3ff');
+  drawCell('cellDim', '#0f1730', '#1f2c55');
+
+  // wall covers x in [-15,15], y in [-5,15]; 50 px per unit
+  const WX0 = -15, WX1 = 15, WY0 = -5, WY1 = 15, PX = 50;
+  (function drawWall() {
+    const c = document.getElementById('wallCanvas'), g = c.getContext('2d');
+    const W = c.width, H = c.height;
+    g.fillStyle = '#131c3c'; g.fillRect(0, 0, W, H);
+    const sx = x => (x - WX0) * PX, sy = y => H - (y - WY0) * PX;
+    for (let x = WX0; x <= WX1; x++) {
+      g.strokeStyle = x % 5 === 0 ? '#4d5f9e' : '#28366a'; g.lineWidth = x % 5 === 0 ? 3 : 1.5;
+      g.beginPath(); g.moveTo(sx(x), 0); g.lineTo(sx(x), H); g.stroke();
+    }
+    for (let y = WY0; y <= WY1; y++) {
+      g.strokeStyle = y % 5 === 0 ? '#4d5f9e' : '#28366a'; g.lineWidth = y % 5 === 0 ? 3 : 1.5;
+      g.beginPath(); g.moveTo(0, sy(y)); g.lineTo(W, sy(y)); g.stroke();
+    }
+    g.strokeStyle = '#fff'; g.lineWidth = 5;
+    g.beginPath(); g.moveTo(0, sy(0)); g.lineTo(W, sy(0)); g.stroke();
+    g.beginPath(); g.moveTo(sx(0), 0); g.lineTo(sx(0), H); g.stroke();
+    g.fillStyle = '#cfd8ff'; g.font = 'bold 22px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'top';
+    for (let x = WX0; x <= WX1; x++) if (x) g.fillText(x, sx(x), sy(0) + 6);
+    g.textAlign = 'left'; g.textBaseline = 'middle';
+    for (let y = WY0; y <= WY1; y++) if (y) g.fillText(y, sx(0) + 8, sy(y));
+    g.font = 'bold 34px sans-serif'; g.fillStyle = '#fff';
+    g.fillText('x', W - 40, sy(0) - 30); g.fillText('y', sx(0) + 30, 24);
+  })();
+
+  // ---------- state ----------
+  let m = 1, b = 0, px = 0;          // slope, intercept, player x
+  let mode = 'explore';              // 'explore' | 'guess'
+  let guessTarget = null, guessScore = 0, guessTries = 0;
+  const PRESETS = [-2, -1, -0.5, 0, 0.5, 1, 2, 3];
+  const XMIN = -8, XMAX = 8;
+
+  const rampTilt = document.getElementById('rampTilt');
+  const rig = document.getElementById('rig');
+  const wallMarks = document.getElementById('wallMarks');
+  const wallEq = document.getElementById('wallEq');
+  const beams = document.getElementById('beams');
+  const readout = document.getElementById('readout');
+  const panel = document.getElementById('panel');
+
+  function fmt(v) {                       // pretty fraction for halves/thirds/quarters
+    if (Number.isInteger(v)) return `${v}`;
+    for (const d of [2, 3, 4]) { const n = v * d; if (Math.abs(n - Math.round(n)) < 1e-9) return `${Math.round(n)}/${d}`; }
+    return v.toFixed(2);
+  }
+  function eqString(mm, bb) {
+    let s = 'y = ';
+    const ms = fmt(mm);
+    if (mm === 0) s += fmt(bb);
+    else {
+      s += (ms === '1' ? '' : ms === '-1' ? '-' : ms.includes('/') ? `(${ms})` : ms) + 'x';
+      if (bb !== 0) s += (bb > 0 ? ' + ' : ' - ') + fmt(Math.abs(bb));
+    }
+    return s;
+  }
+  function el(tag, attrs, parent) {
+    const e = document.createElement(tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    parent.appendChild(e);
+    return e;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+  // clip the line y = mx + b to the wall rectangle
+  function wallSegment() {
+    const pts = [];
+    [[WX0, m * WX0 + b], [WX1, m * WX1 + b]].forEach(([x, y]) => { if (y >= WY0 && y <= WY1) pts.push({ x, y }); });
+    if (m !== 0) [[(WY0 - b) / m, WY0], [(WY1 - b) / m, WY1]].forEach(([x, y]) => { if (x >= WX0 && x <= WX1) pts.push({ x, y }); });
+    pts.sort((u, v) => u.x - v.x);
+    return [pts[0], pts[pts.length - 1]];
+  }
+
+  function render(animateWalk) {
+    const y = m * px + b;
+    const deg = Math.atan(m) * 180 / Math.PI;
+    rampTilt.setAttribute('position', `0 ${b} 0`);
+    rampTilt.setAttribute('rotation', `0 0 ${deg}`);
+
+    if (animateWalk) {
+      rig.removeAttribute('animation');
+      rig.setAttribute('animation', `property: position; to: ${px} ${y} 0; dur: 700; easing: easeInOutQuad`);
+    } else {
+      rig.removeAttribute('animation');
+      rig.setAttribute('position', `${px} ${y} 0`);
+    }
+
+    const showEq = mode === 'explore' || (guessTarget && guessTarget.revealed);
+    const riseLabel = showEq ? fmt(m) : '?';
+
+    // wall: line, "you are here", rise/run steps
+    clear(wallMarks);
+    const [A, B] = wallSegment();
+    if (A && B) el('a-entity', { line: `start: ${A.x} ${A.y} 0; end: ${B.x} ${B.y} 0; color: #ffd166; opacity: 0.95` }, wallMarks);
+    el('a-sphere', { position: `${px} ${y} 0.05`, radius: 0.18, color: '#ef476f', material: 'shader: flat' }, wallMarks);
+    el('a-entity', { position: `${px} ${y + 0.55} 0.05`, text: `value: you (${fmt(px)}, ${fmt(y)}); align: center; width: 6; wrapCount: 26; color: #ef476f` }, wallMarks);
+    // run (green) then rise (red) from the player's point
+    el('a-entity', { line: `start: ${px} ${y} 0.03; end: ${px + 1} ${y} 0.03; color: #06d6a0` }, wallMarks);
+    el('a-box', { position: `${px + 0.5} ${y} 0.03`, width: 1, height: 0.06, depth: 0.02, color: '#06d6a0', material: 'shader: flat' }, wallMarks);
+    if (m !== 0) el('a-box', { position: `${px + 1} ${y + m / 2} 0.03`, width: 0.06, height: Math.abs(m), depth: 0.02, color: '#ff6b81', material: 'shader: flat' }, wallMarks);
+    el('a-entity', { position: `${px + 0.5} ${y - 0.4} 0.05`, text: `value: run 1; align: center; width: 5; wrapCount: 26; color: #06d6a0` }, wallMarks);
+    el('a-entity', { position: `${px + 1.45} ${y + m / 2} 0.05`, text: `value: rise ${riseLabel}; align: left; width: 5; wrapCount: 26; color: #ff6b81` }, wallMarks);
+
+    wallEq.setAttribute('text', 'value', showEq ? eqString(m, b) : 'y = ? x + ' + fmt(b));
+
+    // beams in the world next to the player (on the hill surface, just ahead)
+    clear(beams);
+    const bz = -2.2;
+    el('a-box', { position: `${px + 0.5} ${y + 0.03} ${bz}`, width: 1, height: 0.06, depth: 0.06, color: '#06d6a0', material: 'shader: flat' }, beams);
+    if (m !== 0) el('a-box', { position: `${px + 1} ${y + m / 2 + 0.03} ${bz}`, width: 0.06, height: Math.abs(m), depth: 0.06, color: '#ff6b81', material: 'shader: flat' }, beams);
+    el('a-entity', { position: `${px + 0.5} ${y + 0.25} ${bz}`, text: `value: run 1; align: center; width: 2; wrapCount: 14; color: #06d6a0` }, beams);
+    el('a-entity', { position: `${px + 1.15} ${y + m / 2 + 0.03} ${bz}`, text: `value: rise ${riseLabel}; align: left; width: 2; wrapCount: 14; color: #ff6b81` }, beams);
+
+    // panel readout
+    let s;
+    if (mode === 'explore') {
+      s = `${eqString(m, b)}\n`;
+      s += `slope m = rise/run = ${fmt(m)}/1 = ${fmt(m)}     b = ${fmt(b)}\n`;
+      s += `You are at (${fmt(px)}, ${fmt(y)})   `;
+      s += m > 0 ? 'Uphill to the right' : m < 0 ? 'Downhill to the right' : 'Flat';
+    } else {
+      s = `GUESS THE SLOPE   Score ${guessScore}/${guessTries}\n`;
+      s += guessTarget && guessTarget.msg ? guessTarget.msg : 'Feel the hill, check rise over run,\nthen pick m below.';
+      s += `\nYou are at (${fmt(px)}, ${fmt(y)})`;
+    }
+    readout.setAttribute('text', 'value', s);
+  }
+
+  // ---------- buttons ----------
+  const buttons = [];
+  function button(label, x, y, w, color, onClick, parent) {
+    const bEl = el('a-entity', {
+      geometry: `primitive: plane; width: ${w}; height: 0.19`,
+      material: `color: ${color}; shader: flat`,
+      position: `${x} ${y} 0.01`, class: 'clickable'
+    }, parent || panel);
+    el('a-entity', { position: '0 0 0.01', text: `value: ${label}; align: center; width: ${w * 0.95}; wrapCount: ${Math.max(6, label.length + 2)}; color: #fff` }, bEl);
+    bEl.addEventListener('mouseenter', () => bEl.setAttribute('material', 'color', '#6c7fd8'));
+    bEl.addEventListener('mouseleave', () => bEl.setAttribute('material', 'color', color));
+    bEl.addEventListener('click', onClick);
+    buttons.push(bEl);
+    return bEl;
+  }
+
+  // row 1: slope presets
+  el('a-entity', { position: '-0.98 0.2 0.01', text: 'value: m =; align: left; width: 1.5; wrapCount: 30; color: #8fd3ff' }, panel);
+  PRESETS.forEach((v, i) => {
+    button(fmt(v), -0.72 + i * 0.235, 0.2, 0.21, '#2b3a67', () => { if (mode === 'explore') { m = v; render(false); } });
+  });
+  // row 2: steeper / flatter / intercept
+  button('Flatter', -0.78, -0.04, 0.42, '#2b3a67', () => { if (mode === 'explore') { m = Math.max(-3, +(m - 0.5).toFixed(2)); render(false); } });
+  button('Steeper', -0.33, -0.04, 0.42, '#2b3a67', () => { if (mode === 'explore') { m = Math.min(4, +(m + 0.5).toFixed(2)); render(false); } });
+  button('b - 1', 0.28, -0.04, 0.42, '#3d2b67', () => { b = Math.max(-3, b - 1); render(false); });
+  button('b + 1', 0.73, -0.04, 0.42, '#3d2b67', () => { b = Math.min(5, b + 1); render(false); });
+  // row 3: walk + mode
+  button('< Walk left', -0.65, -0.28, 0.68, '#1f5a4a', () => { px = Math.max(XMIN, px - 1); render(true); });
+  button('Walk right >', 0.08, -0.28, 0.68, '#1f5a4a', () => { px = Math.min(XMAX, px + 1); render(true); });
+  const modeBtn = button('Mode: Explore', 0.73, -0.28, 0.58, '#67352b', () => {
+    if (mode === 'explore') { mode = 'guess'; guessScore = 0; guessTries = 0; newGuess(); }
+    else { mode = 'explore'; guessTarget = null; clear(choices); render(false); }
+    modeBtn.querySelector('[text]').setAttribute('text', 'value', mode === 'explore' ? 'Mode: Explore' : 'Mode: Guess');
+  });
+  // row 4: guess choices (filled in guess mode)
+  const choices = el('a-entity', { position: '0 -0.55 0' }, panel);
+
+  function newGuess() {
+    clear(choices);
+    const pool = PRESETS.filter(v => v !== m);
+    m = pool[Math.floor(Math.random() * pool.length)];
+    const opts = new Set([m]);
+    while (opts.size < 4) opts.add(PRESETS[Math.floor(Math.random() * PRESETS.length)]);
+    const arr = [...opts].sort(() => Math.random() - 0.5);
+    guessTarget = { value: m, revealed: false, msg: null };
+    arr.forEach((v, i) => {
+      button('m = ' + fmt(v), -0.75 + i * 0.5, 0, 0.46, '#2b3a67', () => {
+        if (!guessTarget || guessTarget.revealed) return;
+        guessTries++;
+        if (v === m) {
+          guessScore++; guessTarget.revealed = true;
+          guessTarget.msg = `Correct! m = ${fmt(m)}.  ${eqString(m, b)}`;
+          render(false);
+          setTimeout(newGuess, 1800);
+        } else {
+          guessTarget.msg = `Not ${fmt(v)}. Walk right 1: how much did you rise?`;
+          render(false);
+        }
+      }, choices);
+    });
+    render(false);
+  }
+
+  // desktop nicety: refresh the mouse ray on mousedown so a click lands where the pointer is,
+  // even if the scene moved under a stationary mouse
+  const sceneEl = document.querySelector('a-scene');
+  function attachMouseShim() {
+    sceneEl.canvas.addEventListener('mousedown', evt => {
+      const c = sceneEl.components.cursor;
+      if (c && c.data.rayOrigin === 'mouse') { c.onMouseMove(evt); sceneEl.components.raycaster.checkIntersections(); }
+    }, true);
+  }
+  if (sceneEl.canvas) attachMouseShim(); else sceneEl.addEventListener('loaded', attachMouseShim);
+  render(false);
+  document.querySelector('a-scene').addEventListener('enter-vr', () => { document.getElementById('help').style.display = 'none'; });
+})();
+</script>
+</body>
+</html>

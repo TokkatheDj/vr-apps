@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VR Coordinate Plane</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  #help {
+    position: fixed; top: 10px; left: 10px; z-index: 10; max-width: 320px;
+    background: rgba(10,14,30,.82); color: #e8ecff; padding: 12px 14px;
+    border-radius: 10px; font-size: 13px; line-height: 1.45;
+  }
+  #help b { color: #8fd3ff; }
+  #help button { margin-top: 8px; background: #2b3a67; color: #fff; border: 0; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="help">
+  <b>VR Coordinate Plane</b><br>
+  <b>Desktop:</b> drag to look, WASD to move, click the grid to plot a point.<br>
+  <b>Quest:</b> tap "VR" in the corner, point either controller and pull the trigger.<br>
+  Plot two points to see slope, rise/run, and the equation. Hit <b>Challenge</b> for target practice.
+  <br><button onclick="document.getElementById('help').style.display='none'">Hide</button>
+</div>
+
+<a-scene
+  background="color: #0b1020"
+  renderer="antialias: true; colorManagement: true"
+  cursor="rayOrigin: mouse; fuse: false"
+  raycaster="objects: .clickable">
+
+  <a-assets>
+    <canvas id="gridCanvas" width="1024" height="1024"></canvas>
+  </a-assets>
+
+  <!-- Room -->
+  <a-plane position="0 0 0" rotation="-90 0 0" width="14" height="14" color="#141a33"></a-plane>
+  <a-entity light="type: ambient; intensity: 0.9"></a-entity>
+  <a-entity light="type: directional; intensity: 0.5" position="1 4 2"></a-entity>
+
+  <!-- The coordinate plane wall: 4m x 4m, units -10..10 -->
+  <a-plane id="grid" class="clickable" position="0 1.7 -2.6" width="4" height="4"
+           material="src: #gridCanvas; shader: flat"></a-plane>
+  <a-entity id="marks" position="0 1.7 -2.6"></a-entity>
+
+  <!-- Readout panel (left) -->
+  <a-plane position="-3.15 1.9 -2.2" rotation="0 35 0" width="1.5" height="1.55" color="#151d3d" material="shader: flat"></a-plane>
+  <a-entity id="readout" position="-3.15 1.9 -2.19" rotation="0 35 0"
+            text="value: Click the grid to plot a point.; align: left; width: 1.35; wrapCount: 30; color: #e8ecff; baseline: center"></a-entity>
+
+  <!-- Buttons panel (right) -->
+  <a-entity id="buttons" position="3.05 1.9 -2.2" rotation="0 -35 0">
+    <a-plane width="1.5" height="1.55" color="#151d3d" material="shader: flat"></a-plane>
+  </a-entity>
+
+  <!-- Player -->
+  <a-entity id="rig" position="0 0 0.6">
+    <a-entity id="cam" camera look-controls wasd-controls="acceleration: 40" position="0 1.6 0"></a-entity>
+    <a-entity laser-controls="hand: left" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
+    <a-entity laser-controls="hand: right" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+(function () {
+  const RANGE = 10;          // grid runs -10..10
+  const SIZE = 4;            // meters
+  const UNIT = SIZE / (RANGE * 2); // meters per grid unit (0.2)
+
+  // ---------- draw the grid texture ----------
+  const cv = document.getElementById('gridCanvas');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, step = W / (RANGE * 2);
+  ctx.fillStyle = '#1b2447'; ctx.fillRect(0, 0, W, W);
+  for (let i = 0; i <= RANGE * 2; i++) {
+    const p = i * step;
+    ctx.strokeStyle = (i % 5 === 0) ? '#5468a8' : '#2c3a6b';
+    ctx.lineWidth = (i % 5 === 0) ? 3 : 1.5;
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, W); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(W, p); ctx.stroke();
+  }
+  // axes
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, W); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, W / 2); ctx.lineTo(W, W / 2); ctx.stroke();
+  // numbers
+  ctx.fillStyle = '#cfd8ff'; ctx.font = 'bold 26px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (let n = -RANGE; n <= RANGE; n++) {
+    if (n === 0) continue;
+    const x = W / 2 + n * step, y = W / 2 - n * step;
+    ctx.fillText(n, x, W / 2 + 8);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(n, W / 2 + 10, y);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  }
+  ctx.font = 'bold 40px sans-serif'; ctx.fillStyle = '#ffffff';
+  ctx.fillText('x', W - 40, W / 2 - 55);
+  ctx.fillText('y', W / 2 + 40, 10);
+
+  // ---------- state ----------
+  const grid = document.getElementById('grid');
+  const marks = document.getElementById('marks');
+  const readout = document.getElementById('readout');
+  const points = [];          // {x, y, el}
+  let lineEls = [];
+  let mode = 'free';          // 'free' | 'challenge'
+  let target = null, score = 0, attempts = 0;
+  const COLORS = ['#ffd166', '#06d6a0', '#ef476f', '#8fd3ff', '#c77dff'];
+
+  function setReadout(txt) { readout.setAttribute('text', 'value', txt); }
+
+  function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a || 1; }
+  function frac(num, den) {
+    if (den === 0) return 'undefined';
+    if (num === 0) return '0';
+    const g = gcd(num, den);
+    num /= g; den /= g;
+    if (den < 0) { num = -num; den = -den; }
+    return den === 1 ? `${num}` : `${num}/${den}`;
+  }
+  function toLocal(worldPoint) {
+    const p = worldPoint.clone();
+    grid.object3D.worldToLocal(p);
+    return { gx: Math.round(p.x / UNIT), gy: Math.round(p.y / UNIT) };
+  }
+  function clamp(v) { return Math.max(-RANGE, Math.min(RANGE, v)); }
+
+  function el(tag, attrs, parent) {
+    const e = document.createElement(tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    (parent || marks).appendChild(e);
+    return e;
+  }
+
+  function addPoint(gx, gy, color) {
+    const x = gx * UNIT, y = gy * UNIT;
+    const group = el('a-entity', { position: `${x} ${y} 0.02` });
+    el('a-sphere', { radius: 0.05, color: color, material: 'shader: flat' }, group);
+    el('a-entity', {
+      position: '0.07 0.1 0',
+      text: `value: (${gx}, ${gy}); align: left; width: 1.2; wrapCount: 18; color: ${color}`
+    }, group);
+    // little pop animation
+    group.setAttribute('scale', '0.01 0.01 0.01');
+    group.setAttribute('animation', 'property: scale; to: 1 1 1; dur: 220; easing: easeOutBack');
+    return group;
+  }
+
+  function clearLine() { lineEls.forEach(e => e.parentNode && e.parentNode.removeChild(e)); lineEls = []; }
+
+  function drawLine(p1, p2) {
+    clearLine();
+    const half = SIZE / 2 + 0.05;
+    const x1 = p1.x * UNIT, y1 = p1.y * UNIT, x2 = p2.x * UNIT, y2 = p2.y * UNIT;
+    let a, b;
+    if (p1.x === p2.x) {              // vertical
+      a = { x: x1, y: -half }; b = { x: x1, y: half };
+    } else {
+      const m = (y2 - y1) / (x2 - x1);
+      // extend far, then clip to the square
+      const pts = [];
+      const yAt = x => y1 + m * (x - x1), xAt = y => x1 + (y - y1) / m;
+      [[-half, yAt(-half)], [half, yAt(half)]].forEach(([x, y]) => { if (Math.abs(y) <= half) pts.push({ x, y }); });
+      if (m !== 0) [[xAt(-half), -half], [xAt(half), half]].forEach(([x, y]) => { if (Math.abs(x) <= half) pts.push({ x, y }); });
+      pts.sort((u, v) => u.x - v.x);
+      a = pts[0]; b = pts[pts.length - 1];
+    }
+    lineEls.push(el('a-entity', { line: `start: ${a.x} ${a.y} 0.015; end: ${b.x} ${b.y} 0.015; color: #ffffff; opacity: 0.9` }));
+    // rise / run staircase
+    if (p1.x !== p2.x) {
+      lineEls.push(el('a-entity', { line: `start: ${x1} ${y1} 0.02; end: ${x2} ${y1} 0.02; color: #06d6a0` }));
+      lineEls.push(el('a-entity', {
+        position: `${(x1 + x2) / 2} ${y1 - 0.09} 0.02`,
+        text: `value: run ${p2.x - p1.x}; align: center; width: 1.2; wrapCount: 18; color: #06d6a0`
+      }));
+    }
+    if (p1.y !== p2.y) {
+      lineEls.push(el('a-entity', { line: `start: ${x2} ${y1} 0.02; end: ${x2} ${y2} 0.02; color: #ef476f` }));
+      lineEls.push(el('a-entity', {
+        position: `${x2 + 0.09} ${(y1 + y2) / 2} 0.02`,
+        rotation: '0 0 -90',
+        text: `value: rise ${p2.y - p1.y}; align: center; width: 1.2; wrapCount: 18; color: #ef476f`
+      }));
+    }
+  }
+
+  function describe(p1, p2) {
+    const rise = p2.y - p1.y, run = p2.x - p1.x;
+    let s = `A = (${p1.x}, ${p1.y})\nB = (${p2.x}, ${p2.y})\n\n`;
+    s += `rise = ${p2.y} - (${p1.y}) = ${rise}\nrun  = ${p2.x} - (${p1.x}) = ${run}\n\n`;
+    if (run === 0) {
+      s += `slope = ${rise}/0 = undefined\nVertical line: x = ${p1.x}`;
+    } else {
+      const m = rise / run;
+      s += `slope m = ${rise}/${run} = ${frac(rise, run)}`;
+      if (Number.isInteger(m) === false) s += ` (${m.toFixed(2)})`;
+      // b = y1 - m*x1  as a fraction: (y1*run - rise*x1)/run
+      const bNum = p1.y * run - rise * p1.x, bDen = run;
+      const bStr = frac(bNum, bDen);
+      const mStr = frac(rise, run);
+      let eq = 'y = ';
+      if (m === 0) eq += `${bStr}`;
+      else {
+        eq += (mStr === '1' ? '' : mStr === '-1' ? '-' : mStr.includes('/') ? `(${mStr})` : mStr) + 'x';
+        if (bNum !== 0) eq += (bNum / bDen > 0 ? ' + ' : ' - ') + frac(Math.abs(bNum), Math.abs(bDen));
+      }
+      s += `\n\n${eq}`;
+      s += m > 0 ? '\n(rising line)' : m < 0 ? '\n(falling line)' : '\n(horizontal line)';
+    }
+    return s;
+  }
+
+  // ---------- modes ----------
+  function newTarget() {
+    target = { x: Math.floor(Math.random() * 17) - 8, y: Math.floor(Math.random() * 17) - 8 };
+    setReadout(`CHALLENGE\n\nPlot the point\n\n   (${target.x}, ${target.y})\n\nScore: ${score} / ${attempts}`);
+  }
+
+  function flash(color) {
+    grid.setAttribute('material', 'color', color);
+    setTimeout(() => grid.setAttribute('material', 'color', '#ffffff'), 220);
+  }
+
+  function resetAll() {
+    while (marks.firstChild) marks.removeChild(marks.firstChild);
+    points.length = 0; lineEls = [];
+  }
+
+  grid.addEventListener('click', evt => {
+    // ask the raycaster for a fresh hit (the cursor's cached one can be stale)
+    const cursorEl = evt.detail && evt.detail.cursorEl;
+    const rc = cursorEl && cursorEl.components && cursorEl.components.raycaster;
+    if (rc && rc.checkIntersections) rc.checkIntersections();
+    const inter = (rc && rc.getIntersection(grid)) || (evt.detail && evt.detail.intersection);
+    if (!inter) return;
+    let { gx, gy } = toLocal(inter.point);
+    gx = clamp(gx); gy = clamp(gy);
+
+    if (mode === 'challenge') {
+      attempts++;
+      resetAll();
+      const ok = gx === target.x && gy === target.y;
+      addPoint(gx, gy, ok ? '#06d6a0' : '#ef476f');
+      if (ok) {
+        score++; flash('#9dffd6');
+        setReadout(`Correct!\n\n(${gx}, ${gy})\n\nScore: ${score} / ${attempts}`);
+        setTimeout(newTarget, 1200);
+      } else {
+        flash('#ffb3c1');
+        setReadout(`Not quite.\n\nYou plotted (${gx}, ${gy})\nTarget was (${target.x}, ${target.y})\n\nx goes left/right first,\nthen y goes up/down.\n\nScore: ${score} / ${attempts}`);
+        setTimeout(newTarget, 2500);
+      }
+      return;
+    }
+
+    // free mode: keep the last two points
+    if (points.length >= 2) { resetAll(); }
+    const color = COLORS[points.length % COLORS.length];
+    const p = { x: gx, y: gy, el: addPoint(gx, gy, color) };
+    points.push(p);
+    if (points.length === 1) {
+      setReadout(`A = (${gx}, ${gy})\n\nPlot a second point to\nsee the slope and line.`);
+    } else {
+      drawLine(points[0], points[1]);
+      setReadout(describe(points[0], points[1]));
+    }
+  });
+
+  // ---------- buttons ----------
+  const panel = document.getElementById('buttons');
+  function button(label, y, color, onClick) {
+    const b = el('a-entity', {
+      geometry: 'primitive: plane; width: 1.3; height: 0.24',
+      material: `color: ${color}; shader: flat`,
+      position: `0 ${y} 0.01`, class: 'clickable'
+    }, panel);
+    el('a-entity', { position: '0 0 0.01', text: `value: ${label}; align: center; width: 1.2; wrapCount: 20; color: #fff` }, b);
+    b.addEventListener('mouseenter', () => b.setAttribute('material', 'color', '#6c7fd8'));
+    b.addEventListener('mouseleave', () => b.setAttribute('material', 'color', color));
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  el('a-entity', { position: '0 0.62 0.01', text: 'value: CONTROLS; align: center; width: 1.2; wrapCount: 20; color: #8fd3ff' }, panel);
+  const modeBtn = button('Mode: Free Plot', 0.36, '#2b3a67', () => {
+    if (mode === 'free') {
+      mode = 'challenge'; resetAll(); score = 0; attempts = 0;
+      modeBtn.querySelector('[text]').setAttribute('text', 'value', 'Mode: Challenge');
+      newTarget();
+    } else {
+      mode = 'free'; resetAll();
+      modeBtn.querySelector('[text]').setAttribute('text', 'value', 'Mode: Free Plot');
+      setReadout('Free plot.\n\nClick the grid to plot a point.');
+    }
+  });
+  button('Clear Points', 0.06, '#2b3a67', () => {
+    resetAll();
+    if (mode === 'challenge') newTarget(); else setReadout('Cleared.\n\nClick the grid to plot a point.');
+  });
+  button('Skip Target', -0.24, '#2b3a67', () => { if (mode === 'challenge') newTarget(); });
+  button('Example: (2,3) & (6,1)', -0.54, '#3d2b67', () => {
+    if (mode !== 'free') return;
+    resetAll();
+    points.push({ x: 2, y: 3, el: addPoint(2, 3, COLORS[0]) });
+    points.push({ x: 6, y: 1, el: addPoint(6, 1, COLORS[1]) });
+    drawLine(points[0], points[1]);
+    setReadout(describe(points[0], points[1]));
+  });
+
+  // desktop nicety: refresh the mouse ray on mousedown so a click lands where the pointer is,
+  // even if the scene moved under a stationary mouse
+  const sceneEl = document.querySelector('a-scene');
+  function attachMouseShim() {
+    sceneEl.canvas.addEventListener('mousedown', evt => {
+      const c = sceneEl.components.cursor;
+      if (c && c.data.rayOrigin === 'mouse') { c.onMouseMove(evt); sceneEl.components.raycaster.checkIntersections(); }
+    }, true);
+  }
+  if (sceneEl.canvas) attachMouseShim(); else sceneEl.addEventListener('loaded', attachMouseShim);
+  // hide the HTML help once in VR
+  const scene = document.querySelector('a-scene');
+  scene.addEventListener('enter-vr', () => { document.getElementById('help').style.display = 'none'; });
+})();
+</script>
+</body>
+</html>

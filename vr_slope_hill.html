@@ -47,7 +47,7 @@
 
   <!-- the hill: a plane hinged at (0, b, 0), tilted by atan(m) -->
   <a-entity id="rampTilt" position="0 0 0" rotation="0 0 0">
-    <a-plane rotation="-90 0 0" width="40" height="2.4" material="src: #cell; repeat: 40 3; shader: flat; side: double; opacity: 0.85; transparent: true"></a-plane>
+    <a-plane id="ramp" rotation="-90 0 0" width="22" height="2.4" material="src: #cell; repeat: 22 3; shader: flat; side: double; opacity: 0.85; transparent: true"></a-plane>
   </a-entity>
 
   <!-- graph wall behind the hill -->
@@ -61,7 +61,11 @@
 
   <!-- player rig sits on the line -->
   <a-entity id="rig" position="0 0 0">
-    <a-entity id="cam" camera look-controls position="0 1.6 0"></a-entity>
+    <a-entity id="cam" camera look-controls position="0 1.6 0">
+      <!-- blink-to-black during walks in VR, so gliding up a hill doesn't cause motion sickness -->
+      <a-sphere id="fader" radius="0.25" visible="false"
+                material="color: #000; shader: flat; side: back; transparent: true; opacity: 0; depthTest: false"></a-sphere>
+    </a-entity>
     <a-entity laser-controls="hand: left" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
     <a-entity laser-controls="hand: right" raycaster="objects: .clickable; lineColor: #8fd3ff; lineOpacity: 0.75"></a-entity>
 
@@ -117,8 +121,13 @@
   let guessTarget = null, guessScore = 0, guessTries = 0;
   const PRESETS = [-2, -1, -0.5, 0, 0.5, 1, 2, 3];
   const XMIN = -8, XMAX = 8;
+  const YMIN = WY0 + 1, YMAX = WY1 - 1;   // keep the player on the graph wall
+  let notice = '';                          // one-shot message shown under the readout
 
   const rampTilt = document.getElementById('rampTilt');
+  const ramp = document.getElementById('ramp');
+  const fader = document.getElementById('fader');
+  const sceneEl = document.querySelector('a-scene');
   const rig = document.getElementById('rig');
   const wallMarks = document.getElementById('wallMarks');
   const wallEq = document.getElementById('wallEq');
@@ -158,17 +167,38 @@
     return [pts[0], pts[pts.length - 1]];
   }
 
+  const inRange = x => { const yy = m * x + b; return yy >= YMIN && yy <= YMAX; };
+
   function render(animateWalk) {
+    // a new m or b can leave the player off the wall: step back toward x = 0 (y = b is always in range)
+    if (!inRange(px)) {
+      while (px !== 0 && !inRange(px)) px -= Math.sign(px);
+      notice = 'Moved you back onto the map.';
+    }
     const y = m * px + b;
-    const deg = Math.atan(m) * 180 / Math.PI;
+    const theta = Math.atan(m);
+    const deg = theta * 180 / Math.PI;
     rampTilt.setAttribute('position', `0 ${b} 0`);
     rampTilt.setAttribute('rotation', `0 0 ${deg}`);
+    // the ramp must reach x = XMIN-3 .. XMAX+3 however steep it is
+    const len = (XMAX - XMIN + 6) / Math.cos(theta);
+    ramp.setAttribute('width', len);
+    ramp.setAttribute('material', 'repeat', `${Math.round(len)} 3`);
 
-    if (animateWalk) {
-      rig.removeAttribute('animation');
+    rig.removeAttribute('animation');
+    if (animateWalk && sceneEl.is('vr-mode')) {
+      // VR: blink out, jump, blink in (smooth vertical motion is a nausea trigger)
+      fader.setAttribute('visible', true);
+      fader.setAttribute('animation__fade', 'property: material.opacity; from: 0; to: 1; dur: 120');
+      clearTimeout(render.blinkTimer);
+      render.blinkTimer = setTimeout(() => {
+        rig.setAttribute('position', `${px} ${m * px + b} 0`);
+        fader.setAttribute('animation__fade', 'property: material.opacity; from: 1; to: 0; dur: 160');
+        render.blinkTimer = setTimeout(() => fader.setAttribute('visible', false), 170);
+      }, 130);
+    } else if (animateWalk) {
       rig.setAttribute('animation', `property: position; to: ${px} ${y} 0; dur: 700; easing: easeInOutQuad`);
     } else {
-      rig.removeAttribute('animation');
       rig.setAttribute('position', `${px} ${y} 0`);
     }
 
@@ -210,6 +240,7 @@
       s += guessTarget && guessTarget.msg ? guessTarget.msg : 'Feel the hill, check rise over run,\nthen pick m below.';
       s += `\nYou are at (${fmt(px)}, ${fmt(y)})`;
     }
+    if (notice) { s += `\n${notice}`; notice = ''; }
     readout.setAttribute('text', 'value', s);
   }
 
@@ -240,8 +271,13 @@
   button('b - 1', 0.28, -0.04, 0.42, '#3d2b67', () => { b = Math.max(-3, b - 1); render(false); });
   button('b + 1', 0.73, -0.04, 0.42, '#3d2b67', () => { b = Math.min(5, b + 1); render(false); });
   // row 3: walk + mode
-  button('< Walk left', -0.65, -0.28, 0.68, '#1f5a4a', () => { px = Math.max(XMIN, px - 1); render(true); });
-  button('Walk right >', 0.08, -0.28, 0.68, '#1f5a4a', () => { px = Math.min(XMAX, px + 1); render(true); });
+  function walk(dx) {
+    const nx = px + dx;
+    if (nx < XMIN || nx > XMAX || !inRange(nx)) { notice = 'Edge of the map. Try the other way.'; render(false); return; }
+    px = nx; render(true);
+  }
+  button('< Walk left', -0.65, -0.28, 0.68, '#1f5a4a', () => walk(-1));
+  button('Walk right >', 0.08, -0.28, 0.68, '#1f5a4a', () => walk(1));
   const modeBtn = button('Mode: Explore', 0.73, -0.28, 0.58, '#67352b', () => {
     if (mode === 'explore') { mode = 'guess'; guessScore = 0; guessTries = 0; newGuess(); }
     else { mode = 'explore'; guessTarget = null; clear(choices); render(false); }
@@ -278,7 +314,6 @@
 
   // desktop nicety: refresh the mouse ray on mousedown so a click lands where the pointer is,
   // even if the scene moved under a stationary mouse
-  const sceneEl = document.querySelector('a-scene');
   function attachMouseShim() {
     sceneEl.canvas.addEventListener('mousedown', evt => {
       const c = sceneEl.components.cursor;
@@ -287,7 +322,29 @@
   }
   if (sceneEl.canvas) attachMouseShim(); else sceneEl.addEventListener('loaded', attachMouseShim);
   render(false);
-  document.querySelector('a-scene').addEventListener('enter-vr', () => { document.getElementById('help').style.display = 'none'; });
+  sceneEl.addEventListener('enter-vr', () => {
+    document.getElementById('help').style.display = 'none';
+    showVrHelp('You are standing on the line y = mx + b.\n\n' +
+      'Point at the panel and pull the trigger. Change m to tilt the hill, Walk to move along it, or switch to Guess mode.\n\n' +
+      'The big wall behind the hill shows where you are on the line.');
+  });
+
+  // the HTML help box can't be seen in the headset, so show a sign once; the trigger closes it
+  let vrHelpShown = false;
+  function showVrHelp(msg) {
+    if (vrHelpShown) return;
+    vrHelpShown = true;
+    const sign = el('a-entity', {
+      position: '0 1.45 -1.1', class: 'clickable',
+      geometry: 'primitive: plane; width: 1.1; height: 0.66',
+      material: 'color: #0f1733; shader: flat'
+    }, rig);
+    const txt = el('a-entity', { position: '0 0.04 0.01' }, sign);
+    txt.setAttribute('text', { value: msg, align: 'center', width: 1, wrapCount: 34, color: '#e8ecff' });
+    const tip = el('a-entity', { position: '0 -0.27 0.01' }, sign);
+    tip.setAttribute('text', { value: '(pull the trigger on this sign to close it)', align: 'center', width: 0.9, wrapCount: 44, color: '#8fd3ff' });
+    sign.addEventListener('click', evt => { evt.stopPropagation(); sign.parentNode.removeChild(sign); });
+  }
 })();
 </script>
 </body>

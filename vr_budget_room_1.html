@@ -20,7 +20,9 @@
 <div id="help">
   <b>VR Budget Room</b><br>
   Every box on the shelf is a monthly expense. Sort them into <b>Needs</b>, <b>Wants</b>, and <b>Savings</b>
-  without going over your take-home pay. Target: <b>50 / 30 / 20</b>.<br>
+  without going over your take-home pay. Target: <b>50 / 30 / 20</b>.
+  Pay for every need once. Some needs have a cheaper box (a roommate, a used car).
+  <b>Sweep</b> moves the money that is left over into savings.<br>
   <b>Desktop:</b> drag to look, WASD to move, click a box to pick it up, click a bin to drop it. Click the shelf to put it back.<br>
   <b>Quest:</b> tap "VR", point a controller and pull the trigger.
   <br><button onclick="document.getElementById('help').style.display='none'">Hide</button>
@@ -61,7 +63,7 @@
   <!-- feedback + buttons panel (right) -->
   <a-entity id="panel" position="3.1 1.8 -1.6" rotation="0 -40 0">
     <a-plane width="1.7" height="1.7" color="#151d3d" material="shader: flat"></a-plane>
-    <a-entity id="feedback" position="0 0.28 0.01"
+    <a-entity id="feedback" position="0 0.38 0.01"
               text="value: Sort every box, then hit Check Budget.; align: center; width: 1.55; wrapCount: 30; color: #e8ecff; baseline: center"></a-entity>
   </a-entity>
 
@@ -76,14 +78,18 @@
 <script>
 (function () {
   // ---------- data ----------
+  // every need has a group; the budget must cover each group exactly once.
+  // Rent and Car payment have cheaper alternatives, which is how $3,200 fits 50/30/20.
   const ITEMS = [
-    { name: 'Rent', cost: 1100, cat: 'needs' },
-    { name: 'Groceries', cost: 350, cat: 'needs' },
-    { name: 'Car payment', cost: 300, cat: 'needs' },
-    { name: 'Car insurance', cost: 120, cat: 'needs' },
-    { name: 'Gas', cost: 140, cat: 'needs' },
-    { name: 'Utilities', cost: 110, cat: 'needs' },
-    { name: 'Phone plan', cost: 60, cat: 'needs' },
+    { name: 'Rent', cost: 1100, cat: 'needs', group: 'housing' },
+    { name: 'Rent w/ roommate', cost: 650, cat: 'needs', group: 'housing' },
+    { name: 'Groceries', cost: 350, cat: 'needs', group: 'food' },
+    { name: 'Car payment', cost: 300, cat: 'needs', group: 'car' },
+    { name: 'Used car', cost: 150, cat: 'needs', group: 'car' },
+    { name: 'Car insurance', cost: 120, cat: 'needs', group: 'insurance' },
+    { name: 'Gas', cost: 140, cat: 'needs', group: 'gas' },
+    { name: 'Utilities', cost: 110, cat: 'needs', group: 'utilities' },
+    { name: 'Phone plan', cost: 60, cat: 'needs', group: 'phone' },
     { name: 'Eating out', cost: 220, cat: 'wants' },
     { name: 'New sneakers', cost: 90, cat: 'wants' },
     { name: 'Streaming', cost: 35, cat: 'wants' },
@@ -94,8 +100,14 @@
     { name: 'Roth IRA', cost: 150, cat: 'savings' },
     { name: 'Extra savings', cost: 100, cat: 'savings' },
     { name: 'Extra savings', cost: 100, cat: 'savings' },
-    { name: 'Extra savings', cost: 100, cat: 'savings' }
+    { name: 'Extra savings', cost: 100, cat: 'savings' },
+    // filled in by the Sweep button; hidden until then
+    { name: 'Leftover', cost: 0, cat: 'savings', sweep: true }
   ];
+  const NEED_GROUPS = {
+    housing: 'Housing (Rent)', food: 'Groceries', car: 'A car', insurance: 'Car insurance',
+    gas: 'Gas', utilities: 'Utilities', phone: 'Phone'
+  };
   const INCOMES = [2400, 3200, 4500];
   let incomeIdx = 1;
   const PALETTE = ['#4361ee', '#7209b7', '#f72585', '#4cc9f0', '#f77f00', '#2a9d8f', '#e76f51', '#8338ec', '#3a86ff', '#ff006e', '#fb5607', '#06d6a0'];
@@ -123,10 +135,10 @@
   const pct = (n, d) => Math.round(100 * n / d) + '%';
 
   // ---------- shelf positions ----------
-  const COLS = 6;
+  const COLS = 7;
   function shelfPos(i) {
     const col = i % COLS, row = Math.floor(i / COLS);
-    return { x: -2.1 + col * 0.84, y: 2.25 - row * 0.62, z: -3.05 };
+    return { x: -2.16 + col * 0.72, y: 2.25 - row * 0.62, z: -3.05 };
   }
 
   // ---------- build items ----------
@@ -143,6 +155,8 @@
       text: `value: ${it.name}\n${money(it.cost)}; align: center; width: 0.42; wrapCount: 11; color: #fff`
     }, box);
     it.el = box;
+    it.labelEl = box.firstChild;
+    if (it.sweep) { box.setAttribute('visible', false); box.classList.remove('clickable'); }
     box.addEventListener('mouseenter', () => { if (selected !== it) box.setAttribute('scale', '1.08 1.08 1.08'); });
     box.addEventListener('mouseleave', () => { if (selected !== it) box.setAttribute('scale', '1 1 1'); });
     box.addEventListener('click', evt => { evt.stopPropagation(); toggleSelect(it); });
@@ -222,26 +236,57 @@
     removeFromBin(it);
     deselect();
     it.el.setAttribute('scale', '1 1 1');
-    moveTo(it, shelfPos(ITEMS.indexOf(it)));
-    feedback.setAttribute('text', 'value', `${it.name} is back on the shelf.\n(Not spending it this month.)`);
+    if (it.sweep) {
+      hideSweep();
+      feedback.setAttribute('text', 'value', 'Leftover savings removed.');
+    } else {
+      moveTo(it, shelfPos(ITEMS.indexOf(it)));
+      feedback.setAttribute('text', 'value', `${it.name} is back on the shelf.\n(Not spending it this month.)`);
+    }
     updateTotals();
+  }
+
+  // ---------- sweep leftover into savings ----------
+  const sweepItem = ITEMS.find(it => it.sweep);
+  function hideSweep() {
+    sweepItem.cost = 0;
+    sweepItem.el.setAttribute('visible', false);
+    sweepItem.el.classList.remove('clickable');
+    sweepItem.el.removeAttribute('animation__move');
+    const p = shelfPos(ITEMS.indexOf(sweepItem));
+    sweepItem.el.setAttribute('position', `${p.x} ${p.y} ${p.z}`);
+  }
+  function sweepLeftover() {
+    removeFromBin(sweepItem);
+    if (selected === sweepItem) deselect();
+    const left = INCOMES[incomeIdx] - sums().spent;
+    if (left <= 0) {
+      hideSweep(); updateTotals();
+      feedback.setAttribute('text', 'value', 'Nothing left over to save.\n\nPut something back on the shelf first.');
+      return;
+    }
+    sweepItem.cost = left;
+    sweepItem.labelEl.setAttribute('text', 'value', `Leftover\n${money(left)}`);
+    sweepItem.el.setAttribute('visible', true);
+    sweepItem.el.classList.add('clickable');
+    placeInBin(sweepItem, BINS.find(b => b.key === 'savings'));
+    feedback.setAttribute('text', 'value', `${money(left)} left over\nmoved to SAVINGS.\n\nEvery dollar has a job now.`);
   }
   shelf.addEventListener('click', () => { if (selected) returnToShelf(selected); });
 
   // ---------- totals + check ----------
   function sums() {
     const s = { needs: 0, wants: 0, savings: 0, unsorted: 0 };
-    ITEMS.forEach(it => { if (it.bin) s[it.bin] += it.cost; else s.unsorted++; });
+    ITEMS.forEach(it => { if (it.bin) s[it.bin] += it.cost; else if (!it.sweep) s.unsorted++; });
     s.spent = s.needs + s.wants + s.savings;
     return s;
   }
   function updateTotals() {
     const inc = INCOMES[incomeIdx], s = sums();
     let t = `TAKE-HOME PAY: ${money(inc)}/mo\n\n`;
-    t += `Needs    ${money(s.needs).padEnd(7)} ${pct(s.needs, inc)}\n`;
-    t += `Wants    ${money(s.wants).padEnd(7)} ${pct(s.wants, inc)}\n`;
-    t += `Savings  ${money(s.savings).padEnd(7)} ${pct(s.savings, inc)}\n`;
-    t += `------------------------\n`;
+    t += `Needs: ${money(s.needs)} (${pct(s.needs, inc)})\n`;
+    t += `Wants: ${money(s.wants)} (${pct(s.wants, inc)})\n`;
+    t += `Savings: ${money(s.savings)} (${pct(s.savings, inc)})\n\n`;
     t += `Assigned ${money(s.spent)}\n`;
     const left = inc - s.spent;
     t += left >= 0 ? `Left over ${money(left)}\n` : `OVER BY ${money(-left)} !\n`;
@@ -258,23 +303,35 @@
       const label = { needs: 'a NEED', wants: 'a WANT', savings: 'SAVINGS' }[w.cat];
       lines.push(`${w.name} usually counts as ${label}${wrong.length > 1 ? ` (+${wrong.length - 1} more to fix)` : ''}.`);
     }
+    // each need must be covered exactly once (skipping rent is not a budget)
+    const missing = [], doubled = [];
+    Object.keys(NEED_GROUPS).forEach(g => {
+      const n = ITEMS.filter(it => it.group === g && it.bin).length;
+      if (n === 0) missing.push(g); else if (n > 1) doubled.push(g);
+    });
+    if (missing.length) lines.push(`Missing a need: ${NEED_GROUPS[missing[0]]}${missing.length > 1 ? ` (+${missing.length - 1} more)` : ''}. You have to pay for it.`);
+    if (doubled.length) {
+      const names = ITEMS.filter(it => it.group === doubled[0]).map(it => it.name).join(' OR ');
+      lines.push(`You're paying for ${NEED_GROUPS[doubled[0]]} twice. Pick one: ${names}.`);
+    }
     if (s.spent > inc) lines.push(`You're ${money(s.spent - inc)} over. Put a Want back on the shelf.`);
     const n = s.needs / inc, w = s.wants / inc, sv = s.savings / inc;
     lines.push(`Needs ${Math.round(n * 100)}% ${n <= 0.5 ? 'OK' : 'over 50%'}`);
     lines.push(`Wants ${Math.round(w * 100)}% ${w <= 0.3 ? 'OK' : 'over 30%'}`);
     lines.push(`Savings ${Math.round(sv * 100)}% ${sv >= 0.2 ? 'OK' : 'under 20%'}`);
     const left = inc - s.spent;
-    if (left > 0 && sv < 0.2) lines.push(`${money(left)} is left over. Move it to savings!`);
-    const pass = !wrong.length && s.spent <= inc && n <= 0.5 && w <= 0.3 && sv >= 0.2;
+    if (left > 0 && sv < 0.2) lines.push(`${money(left)} is left over. Hit Sweep to save it!`);
+    const pass = !wrong.length && !missing.length && !doubled.length && s.spent <= inc && n <= 0.5 && w <= 0.3 && sv >= 0.2;
     if (pass) lines.unshift('BALANCED BUDGET! Nice work.');
-    else if (n > 0.5 && !wrong.length) lines.push('Needs over 50% is common. What could change: cheaper rent, roommate, more income?');
-    feedback.setAttribute('text', 'value', lines.join('\n\n'));
+    else if (n > 0.5 && !wrong.length && !missing.length && !doubled.length) lines.push('Needs over 50%. Try the cheaper boxes: a roommate, a used car. Or more income.');
+    feedback.setAttribute('text', 'value', lines.join('\n'));
   }
 
   function resetAll() {
     deselect();
     BINS.forEach(b => { b.items = []; b.totalEl.setAttribute('text', 'value', '$0'); });
     ITEMS.forEach((it, i) => { it.bin = null; it.el.setAttribute('scale', '1 1 1'); moveTo(it, shelfPos(i)); });
+    hideSweep();
     feedback.setAttribute('text', 'value', 'Shelf restocked.\n\nSort every box, then hit Check Budget.');
     updateTotals();
   }
@@ -282,7 +339,7 @@
   // ---------- buttons ----------
   function button(label, y, color, onClick) {
     const b = el('a-entity', {
-      geometry: 'primitive: plane; width: 1.5; height: 0.22',
+      geometry: 'primitive: plane; width: 1.5; height: 0.17',
       material: `color: ${color}; shader: flat`, position: `0 ${y} 0.01`, class: 'clickable'
     }, panel);
     el('a-entity', { position: '0 0 0.01', text: `value: ${label}; align: center; width: 1.4; wrapCount: 24; color: #fff` }, b);
@@ -291,13 +348,16 @@
     b.addEventListener('click', evt => { evt.stopPropagation(); onClick(); });
     return b;
   }
-  button('Check Budget', -0.32, '#1f5a4a', checkBudget);
-  const incBtn = button(`Income: ${money(INCOMES[incomeIdx])}/mo`, -0.58, '#3d2b67', () => {
+  button('Check Budget', -0.2, '#1f5a4a', checkBudget);
+  button('Sweep leftover to Savings', -0.4, '#1d6b5a', sweepLeftover);
+  const incBtn = button(`Income: ${money(INCOMES[incomeIdx])}/mo`, -0.6, '#3d2b67', () => {
     incomeIdx = (incomeIdx + 1) % INCOMES.length;
     incBtn.querySelector('[text]').setAttribute('text', 'value', `Income: ${money(INCOMES[incomeIdx])}/mo`);
+    // the swept amount was for the old income
+    if (sweepItem.bin) { removeFromBin(sweepItem); if (selected === sweepItem) deselect(); hideSweep(); }
     updateTotals();
   });
-  button('Reset Shelf', -0.8, '#67352b', resetAll);
+  button('Reset Shelf', -0.78, '#67352b', resetAll);
 
   updateTotals();
 
@@ -310,7 +370,29 @@
     }, true);
   }
   if (sceneEl.canvas) attachMouseShim(); else sceneEl.addEventListener('loaded', attachMouseShim);
-  sceneEl.addEventListener('enter-vr', () => { document.getElementById('help').style.display = 'none'; });
+  sceneEl.addEventListener('enter-vr', () => {
+    document.getElementById('help').style.display = 'none';
+    showVrHelp('Point at a box and pull the trigger to pick it up, then point at a bin to drop it.\n\n' +
+      'Pay for every need once, stay under your take-home pay, and aim for 50 / 30 / 20.\n\n' +
+      'Sweep puts the money that is left over into savings.');
+  });
+
+  // the HTML help box can't be seen in the headset, so show a sign once; the trigger closes it
+  let vrHelpShown = false;
+  function showVrHelp(msg) {
+    if (vrHelpShown) return;
+    vrHelpShown = true;
+    const sign = el('a-entity', {
+      position: '0 1.45 -1.1', class: 'clickable',
+      geometry: 'primitive: plane; width: 1.1; height: 0.66',
+      material: 'color: #0f1733; shader: flat'
+    }, document.getElementById('rig'));
+    const txt = el('a-entity', { position: '0 0.04 0.01' }, sign);
+    txt.setAttribute('text', { value: msg, align: 'center', width: 1, wrapCount: 34, color: '#e8ecff' });
+    const tip = el('a-entity', { position: '0 -0.27 0.01' }, sign);
+    tip.setAttribute('text', { value: '(pull the trigger on this sign to close it)', align: 'center', width: 0.9, wrapCount: 44, color: '#8fd3ff' });
+    sign.addEventListener('click', evt => { evt.stopPropagation(); sign.parentNode.removeChild(sign); });
+  }
 })();
 </script>
 </body>

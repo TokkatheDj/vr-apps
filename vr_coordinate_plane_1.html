@@ -321,7 +321,29 @@
   if (sceneEl.canvas) attachMouseShim(); else sceneEl.addEventListener('loaded', attachMouseShim);
   // hide the HTML help once in VR
   const scene = document.querySelector('a-scene');
-  scene.addEventListener('enter-vr', () => { document.getElementById('help').style.display = 'none'; });
+  scene.addEventListener('enter-vr', () => {
+    document.getElementById('help').style.display = 'none';
+    showVrHelp('Point a controller at the grid and pull the trigger to plot a point.\n\n' +
+      'Plot two points to see the slope, rise/run, and the equation.\n\n' +
+      'The buttons on your right switch to Challenge mode.');
+  });
+
+  // the HTML help box can't be seen in the headset, so show a sign once; the trigger closes it
+  let vrHelpShown = false;
+  function showVrHelp(msg) {
+    if (vrHelpShown) return;
+    vrHelpShown = true;
+    const sign = el('a-entity', {
+      position: '0 1.45 -1.1', class: 'clickable',
+      geometry: 'primitive: plane; width: 1.1; height: 0.66',
+      material: 'color: #0f1733; shader: flat'
+    }, document.getElementById('rig'));
+    const txt = el('a-entity', { position: '0 0.04 0.01' }, sign);
+    txt.setAttribute('text', { value: msg, align: 'center', width: 1, wrapCount: 34, color: '#e8ecff' });
+    const tip = el('a-entity', { position: '0 -0.27 0.01' }, sign);
+    tip.setAttribute('text', { value: '(pull the trigger on this sign to close it)', align: 'center', width: 0.9, wrapCount: 44, color: '#8fd3ff' });
+    sign.addEventListener('click', evt => { evt.stopPropagation(); sign.parentNode.removeChild(sign); });
+  }
 })();
 </script>
 </body>

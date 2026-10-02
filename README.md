@@ -16,7 +16,7 @@ Every room also works on a laptop: drag to look, click the floating buttons. On 
 
 - WebXR only starts on a secure (HTTPS) page, which is why the rooms are served from GitHub Pages rather than a local server.
 - Comfort: walking in VR blinks to the new spot instead of gliding, which avoids motion sickness.
-- The budget room was rebalanced so a month can actually be balanced at every income level (each need is chosen once, with cheaper options like a roommate or a used car).
+- The budget room can be balanced at $3,200 and $4,500 a month (each need is chosen once; cheaper options like a roommate or a used car make it possible). At $2,400 it can't: even the cheapest needs are 66% of take-home pay, over the 50% the rule allows - a real lesson about who 50/30/20 works for.
 
 ## Run locally
 
